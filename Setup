@@ -1,0 +1,120 @@
+步骤一：MySQL主从同步
+（1）数据库的安装，请参考地址为https://github.com/wanglei15/MySQL/中的Install_Mysql.docx文档。
+（2）连接主数据库服务器，创建具有replication slave和replication client权限的账号。进入mysql执行如下命令：
+grant replication slave,replication client on *.* to replicater@'192.168.31.%' identified by '123456';
+（3）配置主从节点。
+vim /etc/my.cnf 
+[mysqld]
+datadir=/var/lib/mysql
+socket=/var/lib/mysql/mysql.sock
+user=mysql
+security risks
+symbolic-links=0
+
+# 新增加如下两行
+log_bin=/data/mysql/logs/mysql-bin
+server_id=10
+[mysqld_safe]
+log-error=/var/log/mysqld.log
+pid-file=/var/run/mysqld/mysqld.pid
+其中的log_bin指定生成的二进制日子文件的目录和文件名，server_id指定唯一标识的数据库ID。
+（4）配置从节点。
+vim /etc/my.cnf 
+
+[mysqld]
+datadir=/var/lib/mysql
+socket=/var/lib/mysql/mysql.sock
+user=mysql
+symbolic-links=0
+# 新增如下
+server_id=20
+relay_log=/data/mysql/logs/mysql-relay-bin
+read_only=1
+
+[mysqld_safe]
+log-error=/var/log/mysqld.log
+pid-file=/var/run/mysqld/mysqld.pid
+其中relay_log指定中继日志的目录和文件名，最后重启主从数据库服务。
+（5）从节点连接主节点，进入从节点的mysql，执行如下命令：
+change master to master_host='192.168.31.30,master_user='replicater',master_password='123456',master_log_file='mysql-bin.000001',master_log_pos=281;
+其中master_log_file和master_log_pos可以根据主节点的show master status语句查询到。
+（6）进入从节点的mysql，执行如下命令，查看状态。
+show slave status\G;
+（7）启动从节点的复制，可以看到从节点的IO线程和SQL线程启动。
+start slave;
+MySQL主从复制已经配置完成，主节点的数据将与从节点的数据保持一致。
+步骤二：MySQL读写分离
+（1）安装ProxySQL中间件，ProxySQL的下载地址为https://github.com/sysown/proxysql/releases。
+yum -y install proxysql-1.4.10-1-centos67.x86_64.rpm
+（2）创建ProxySQL管理账号
+ProxySQL启动后包括有两种类型的端口，一类是管理端口，用于管理配置ProxySQL，另一类是客户端口，用于连接后端的mysql，默认端口是6032和6033。首先配置ProxySQL的管理端，创建管理账号。在/etc/proxysql.cnf中添加如下内容：
+admin_variables=
+{
+   admin_credentials="admin:admin" # 指定管理员的用户名和密码
+   mysql_ifaces="127.0.0.1:6032;/tmp/proxysql_admin.sock" # 指定管理员所在的IP和端口
+}
+（3）配置后端的MySQL
+address指定后端mysql的IP地址，在/etc/proxysql.cnf中添加如下内容：
+mysql_servers =
+(
+    {
+        address = "192.168.31.30" 
+        port = 3306           
+        hostgroup = 1         
+        status = "ONLINE"     
+        weight = 1            
+        compression = 0       
+    max_replication_lag = 10  
+    },
+    {
+        address = "192.168.31.31"
+        port = 3306
+        hostgroup = 2
+        status = "ONLINE"
+        weight = 1
+        compression = 0
+        max_replication_lag = 10
+    }
+)
+（4）创建连接MySQL的账户
+在主节点中，进入mysql，执行如下授权命令：
+grant all on *.* to proxysql@'192.168.31.%' identified by 'proxysql';
+在从节点中，进入mysql，执行如下授权命令：
+grant all on *.* to proxysql@'192.168.31.%' identified by 'proxysql';
+（5）添加规则到ProxySQL主机
+然后将连接mysql的账户proxysql添加到ProxySQL主机，ProxySQL主机通过该账号连接后端mysql并进行操作。在/etc/proxysql.cnf添加规则。
+mysql_users:
+(
+    {
+        username = "proxysql" # no default , required
+        password = "proxysql" # default: ''
+        default_hostgroup = 1 # default: 0
+        active = 1            # default: 1
+    }
+)
+mysql_query_rules:
+(
+    {
+        rule_id=1
+        active=1
+        match_pattern="^SELECT .* FOR UPDATE$"
+        destination_hostgroup=1
+        apply=1
+    },
+    {
+        rule_id=2
+        active=1
+        match_pattern="^SELECT"
+        destination_hostgroup=2
+        apply=1
+    }
+)
+Select开头的查询语句即读操作和其它语句分离。
+（6）测试读写分离
+通过proxysql账户连接ProxySQL主机，分别进行相关的查询操作和更改数据的操作
+mysql -uproxysql -h127.0.0.1 -P6033 -pproxysql
+select user,host from mysql.user;
+create database testdb;
+然后通过管理账户登录ProxySQL查看具体的连接状态
+mysql -uadmin -h127.0.0.1 -P6032 -padmin
+select * from stats_mysql_query_digest;
