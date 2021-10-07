@@ -44,8 +44,7 @@ show slave status\G;
 start slave;
 MySQL主从复制已经配置完成，主节点的数据将与从节点的数据保持一致。
 步骤二：MySQL读写分离
-（1）安装ProxySQL中间件，ProxySQL的下载地址为https://github.com/sysown/proxysql/releases。
-yum -y install proxysql-1.4.10-1-centos67.x86_64.rpm
+（1）安装ProxySQL中间件，ProxySQL的下载地址为https://github.com/wanglei15/MySQL中的proxysql-1.4.10-1-centos67.x86_64.rpm文件。
 （2）创建ProxySQL管理账号
 ProxySQL启动后包括有两种类型的端口，一类是管理端口，用于管理配置ProxySQL，另一类是客户端口，用于连接后端的mysql，默认端口是6032和6033。首先配置ProxySQL的管理端，创建管理账号。在/etc/proxysql.cnf中添加如下内容：
 admin_variables=
